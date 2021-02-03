@@ -219,6 +219,8 @@ func probeDir(dir, destDir string, inner bool) {
 			newFilenames[i] = newName
 		}
 
+		fmt.Println()
+
 		fmt.Printf("[DIRECTORY] %s => %s\n", dir, destDir)
 
 		for i, newName := range newFilenames {
@@ -226,6 +228,8 @@ func probeDir(dir, destDir string, inner bool) {
 
 			fmt.Printf("[VIDEO] %s => %s\n", oldName, newName)
 		}
+
+		fmt.Println()
 
 		fmt.Printf("Is that right? [Y/n] ")
 		var prompt string
@@ -235,6 +239,16 @@ func probeDir(dir, destDir string, inner bool) {
 
 		if prompt == "n" || prompt == "N" {
 			linkWithNewNames = false
+		}
+
+		if !linkWithNewNames {
+			prompt = ""
+			fmt.Printf("Link anyway? [Y/n] ")
+			fmt.Scanln(&prompt)
+
+			if prompt == "n" || prompt == "N" {
+				return
+			}
 		}
 
 		fmt.Println("Now linking the files...")
@@ -273,7 +287,13 @@ func probeDir(dir, destDir string, inner bool) {
 				}
 			} else if err == nil {
 				for i:=2; i<=99; i++ {
-					newName2, extName := getExtName(newName)
+					var newName2, extName string
+					if linkWithNewNames {
+						newName2, extName = getExtName(newName)
+					} else {
+						newName2, extName = getExtName(oldName)
+					}
+
 					newName2 += " (" + strconv.Itoa(i) + ")"
 					newName2 += extName
 					newPath2 := path.Join(destDir, newName2)
