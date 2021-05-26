@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -9,48 +10,79 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/dlclark/regexp2"
 )
 
 const (
-	NameReplaceStr = "$name"
+	NameReplaceStr    = "$name"
 	EpisodeReplaceStr = "$episode"
+	DefaultRuleAnime  = "$name - $episode"
+	DefaultRuleMovie  = "$name"
 )
 
 var (
-	sourceDir = flag.String("src", "", "source dir")
+	sourceDir      = flag.String("src", "", "source dir")
 	destinationDir = flag.String("dst", "", "destination dir")
-	rule = flag.String("rule", "$name - $episode", "episode naming rule")
+	rule           = flag.String("rule", DefaultRuleAnime, "episode naming rule")
 
-	videoSuffix = []string {
+	videoSuffix = []string{
 		".mkv",
 		".mp4",
 		".avi",
 		".ass",
 		".srt",
 		".mka",
+		".m2ts",
 	}
 
-	deleteRegex = []string {
+	deleteRegex = []string{
 		`\[.*?\]`, //find strings between []
 		`\(.*?\)`, //find strings between ()
-		`【.*?】`, //find strings between 【】
-		`（.*?）`, //find strings between （）
-		`<.*?>`, //find strings between <>
+		`【.*?】`,   //find strings between 【】
+		`（.*?）`,   //find strings between （）
+		`<.*?>`,   //find strings between <>
 	}
 
-	deleteChar = []string {
+	deleteChar = []string{
 		" - ",
 	}
+
+	scanner *bufio.Scanner
 )
 
-func isDigit(str string) bool {
+func isDigitOrDot(str string) bool {
 	for _, s := range str {
-		if !(s >= '0' && s <= '9') {
+		if !(s >= '0' && s <= '9' || s == '.') {
 			return false
 		}
 	}
 
 	return true
+}
+
+func getLine() string {
+	if scanner.Scan() {
+		return scanner.Text()
+	}
+
+	return ""
+}
+
+func getSplitPath(path string) (string, string) {
+	index := strings.LastIndexFunc(path, func(r rune) bool {
+		if r == '/' || r == '\\' {
+			return true
+		}
+
+		return false
+	})
+
+	if index < 0 {
+		return "", path
+	}
+
+	return path[:index], path[index+1:]
 }
 
 func probeVideoName(name string) string {
@@ -67,9 +99,9 @@ func probeVideoName(name string) string {
 			}
 
 			sRune := []rune(s)
-			sRune = sRune[1:len(sRune)-1]
+			sRune = sRune[1 : len(sRune)-1]
 
-			if isDigit(string(sRune)) {
+			if isDigitOrDot(string(sRune)) {
 				return s
 			}
 
@@ -79,9 +111,37 @@ func probeVideoName(name string) string {
 
 	//delete chars
 	for _, char := range deleteChar {
-		name = strings.ReplaceAll(name, char, "")
+		name = strings.ReplaceAll(name, char, " ")
 	}
-	return name
+
+	//replace '.' except ext name
+	name2, ext := getExtName(name)
+	extValid := false
+
+	//probe xxx.sc.ass, to get .ass
+	ext2 := path.Ext(ext)
+	if ext2 == "" {
+		ext2 = ext
+	}
+
+	for _, validExtName := range videoSuffix {
+		if ext2 == validExtName {
+			extValid = true
+			break
+		}
+	}
+
+	//match any dot except dots in episode name (e.g. 12.5), but match the dot in (.5  12.) for incomplete episode name
+	regex := regexp2.MustCompile(`((?<!\d+)\.(?!\d+)|(?<!\d+)\.(?=[0-9]+)|(?<=\d+)\.(?!\d+))`, 0)
+	if extValid {
+		name2, _ = regex.Replace(name2, " ", -1, -1)
+		name2 = strings.TrimSpace(name2)
+		return name2 + ext
+	} else {
+		name2, _ = regex.Replace(name, " ", -1, -1)
+		name2 = strings.TrimSpace(name2)
+		return name2
+	}
 }
 
 func getEpisode(name string) string {
@@ -96,21 +156,21 @@ func getEpisode(name string) string {
 		episode = "CM"
 	}
 
-	regex := regexp.MustCompile(`\d+`) //find the last number in string
+	regex := regexp.MustCompile(`(\d{1,3}\.\d{1,2}|\d{1,3})`) //find the last number in string
 	numbersSlice := regex.FindAllString(name, -1)
 	numbers := ""
 	if len(numbersSlice) > 0 {
-		numbers = numbersSlice[len(numbersSlice)-1]
-	}
-
-	if numbers == "" && episode == "" {
-		numbers = "Unknown"
+		numbers = numbersSlice[0]
 	}
 
 	return episode + numbers
 }
 
 func deleteEpisodeName(name, episode string) string {
+	if episode == "" {
+		return name
+	}
+
 	name, extName := getExtName(name)
 	split := strings.Fields(name)
 	newName := ""
@@ -131,24 +191,22 @@ func deleteEpisodeName(name, episode string) string {
 }
 
 func getExtName(name string) (string, string) {
-	dotIndex := strings.LastIndex(name, ".")
-	if dotIndex < 0 {
-		return name, ""
-	}
-
-	extname := name[dotIndex:]
-	name = name[:dotIndex]
-
-	dotIndex = strings.LastIndex(name, ".")
-	if dotIndex < 0 {
-		return name, extname
-	}
+	extname := path.Ext(name)
+	name = name[:len(name)-len(extname)]
 
 	//handle "[02].sc.ass" etc.
-	extname2 := name[dotIndex:]
-	name2 := name[:dotIndex]
-	suffixList := []string {
+	extname2 := path.Ext(name)
+	if extname2 == "" {
+		return name, extname
+	}
+	name2 := name[:len(name)-len(extname2)]
+
+	suffixList := []string{
 		" ", ")", "]", ">", "】", "）",
+	}
+
+	matchList := []string{
+		"sc", "tc", "chs", "cht", "en", "jp",
 	}
 
 	f := false
@@ -159,19 +217,38 @@ func getExtName(name string) (string, string) {
 		}
 	}
 
-	if f {
-		return name2, extname2+extname
+	f2 := false
+	for _, match := range matchList {
+		if strings.Contains(extname2, match) {
+			f2 = true
+			break
+		}
+	}
+
+	if f || f2 {
+		return name2, extname2 + extname
 	} else {
 		return name, extname
 	}
 }
 
-func probeDir(dir, destDir string, inner bool) {
+func getDirName(name string) string {
+	dir := path.Dir(name)
+
+	if dir == "" || dir == "." {
+		index := strings.LastIndex(name, "\\")
+		dir = name[:index]
+	}
+
+	return dir
+}
+
+func getVideosInDir(dir string) []string {
 	//get all files and directories in dir
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		fmt.Printf("Cannot read dir %s. error: %s.\n", dir, err.Error())
-		os.Exit(1)
+		return []string{}
 	}
 
 	//get video files list
@@ -188,36 +265,170 @@ func probeDir(dir, destDir string, inner bool) {
 		}
 	}
 
-	//check video files exists
-	if len(videos) > 0 {
-		newVideos := make([]string, len(videos))
-		episodes := make([]string, len(videos))
+	return videos
+}
 
-		for i, videoName := range videos {
-			newName := probeVideoName(videoName)
-			episode := getEpisode(newName)
-			newName = deleteEpisodeName(newName, episode)
+func checkFileExists(file string) bool {
+	if _, err := os.Stat(file); os.IsNotExist(err) {
+		return false
+	} else if err == nil {
+		return true
+	} else {
+		fmt.Printf("os.Stat unknown error:%s.\n", err.Error())
+		os.Exit(1)
+		return false
+	}
+}
 
-			newVideos[i] = newName
-			episodes[i] = episode
+func checkDirEmpty(dir string) bool {
+	if checkFileExists(dir) {
+		//dir exists
+		files, err := ioutil.ReadDir(dir)
+		if err != nil {
+			fmt.Printf("Cannot read dir %s. error: %s.\n", dir, err.Error())
+			os.Exit(1)
+			return false
 		}
 
-		newFilenames := make([]string, len(videos))
-		for i, video := range newVideos {
-			newName := *rule
-			var extName string
-			video, extName = getExtName(video)
-			video = strings.TrimSpace(video)
-
-			newName = strings.ReplaceAll(newName, NameReplaceStr, video)
-			newName = strings.ReplaceAll(newName, EpisodeReplaceStr, episodes[i])
-			newName = strings.TrimSpace(newName)
-			newName += extName
-
-			newName = strings.TrimSpace(newName)
-
-			newFilenames[i] = newName
+		if len(files) > 0 {
+			return false
+		} else {
+			return true
 		}
+	} else {
+		return true
+	}
+}
+
+func generatesVideoNames(videos, episodes []string) (newFilenames []string) {
+	newFilenames = make([]string, len(videos))
+
+	for i, video := range videos {
+		newName := *rule
+
+		if newName == DefaultRuleAnime {
+			if episodes[i] == "" {
+				newName = DefaultRuleMovie
+			}
+		}
+
+		var extName string
+		video, extName = getExtName(video)
+		video = strings.TrimSpace(video)
+
+		newName = strings.ReplaceAll(newName, NameReplaceStr, video)
+		newName = strings.ReplaceAll(newName, EpisodeReplaceStr, episodes[i])
+		newName = strings.TrimSpace(newName)
+		newName += extName
+
+		newName = strings.TrimSpace(newName)
+
+		newFilenames[i] = newName
+	}
+
+	return
+}
+
+func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []string, newVideoName string) {
+	var input string
+
+	fmt.Println()
+	defer fmt.Println()
+
+	videoName, _ := getExtName(videos[0])
+	videoName = strings.TrimSpace(videoName)
+
+	fmt.Printf("Input anime name: [%s] ", videoName)
+	input = getLine()
+
+	if input != "" {
+		videoName = input
+	}
+
+	newVideoName = videoName
+
+	newVideos = make([]string, len(videos))
+	newEpisodes = make([]string, len(episodes))
+
+	for i, name := range names {
+		_, ext := getExtName(name)
+		episode := episodes[i]
+
+		fmt.Printf("Input episode name of '%s' (# for empty): [%s] ", name, episode)
+		input = getLine()
+
+		if input != "" {
+			episode = input
+		}
+
+		if input == "#" {
+			episode = ""
+		}
+
+		newVideos[i] = videoName + ext
+		newEpisodes[i] = episode
+	}
+
+	return
+}
+
+func probeDirInner(dir, destDir string, videos []string, level int, origDestDir string) {
+	var prompt string
+
+	if videos == nil {
+		videos = getVideosInDir(dir)
+	}
+
+	if len(videos) == 0 {
+		fmt.Println("No videos found.")
+		fmt.Println()
+		return
+	}
+
+	//check directory empty.
+	//if not empty, ask user if want to create a sub-directory.
+	//useful in linking just one movie folder.
+	if !checkDirEmpty(destDir) && level == 0 {
+		fmt.Println()
+		fmt.Printf("Directory %s not empty. Do you need create a sub-directory in it? [Y/n] ", destDir)
+		prompt = getLine()
+
+		if prompt != "n" && prompt != "N" {
+			_, dirName := getSplitPath(dir)
+
+			destDir2 := probeVideoName(dirName)
+			destDir2 = strings.TrimSpace(destDir2)
+			if destDir2 == "" {
+				destDir2 = "Unknown"
+			}
+
+			destDir = path.Join(destDir, destDir2)
+			origDestDir = path.Join(origDestDir, destDir2)
+		}
+	}
+
+	newVideos := make([]string, len(videos))
+	episodes := make([]string, len(videos))
+
+	for i, videoName := range videos {
+		newName := probeVideoName(videoName)
+		episode := getEpisode(newName)
+		newName = deleteEpisodeName(newName, episode)
+
+		newVideos[i] = newName
+		episodes[i] = episode
+	}
+
+	linkWithNewNames := true
+
+	var newFilenames []string
+
+	for {
+		if checkFileExists(destDir) {
+			fmt.Printf("[WARNING] Directory '%s' already exists!\n", destDir)
+		}
+
+		newFilenames = generatesVideoNames(newVideos, episodes)
 
 		fmt.Println()
 
@@ -231,107 +442,154 @@ func probeDir(dir, destDir string, inner bool) {
 
 		fmt.Println()
 
-		fmt.Printf("Is that right? [Y/n] ")
-		var prompt string
-		fmt.Scanln(&prompt)
+		prompt = ""
+		for prompt != "y" && prompt != "n" && prompt != "Y" && prompt != "N" {
+			fmt.Printf("Is that right? [Y/n] ")
 
-		linkWithNewNames := true
+			prompt = getLine()
 
-		if prompt == "n" || prompt == "N" {
-			linkWithNewNames = false
+			if prompt == "n" || prompt == "N" {
+				linkWithNewNames = false
+			}
+		}
+
+		if prompt == "y" || prompt == "Y" {
+			break
 		}
 
 		if !linkWithNewNames {
 			prompt = ""
-			fmt.Printf("Link anyway? [Y/n] ")
-			fmt.Scanln(&prompt)
+			fmt.Printf("Manually edit file names? [Y/n] ")
+			prompt = getLine()
 
 			if prompt == "n" || prompt == "N" {
-				return
-			}
-		}
+				prompt = ""
+				fmt.Printf("Link with original names? [Y/n] ")
+				prompt = getLine()
 
-		fmt.Println("Now linking the files...")
+				if prompt == "n" || prompt == "N" {
+					return
+				} else {
+					newVideos = videos
+					destDir = origDestDir
 
-		if !linkWithNewNames {
-			_, dirName := path.Split(dir)
-			dirBase, _ := path.Split(destDir)
-			destDir = path.Join(dirBase, dirName)
-		}
-
-		if _, err := os.Stat(destDir); os.IsNotExist(err) {
-			fmt.Printf("dest not exists, creating.\n")
-			err2 := os.MkdirAll(destDir, 0666)
-			if err2 != nil {
-				fmt.Printf("os.MkdirAll error: %s.\n", err2.Error())
-				return
-			}
-		}
-
-		for i, newName := range newFilenames {
-			oldName := videos[i]
-
-			oldPath := path.Join(dir, oldName)
-			newPath := ""
-			if linkWithNewNames {
-				newPath = path.Join(destDir, newName)
-			} else {
-				newPath = path.Join(destDir, oldName)
-			}
-
-
-			if _, err := os.Stat(newPath); os.IsNotExist(err) {
-				err2 := os.Link(oldPath, newPath)
-				if err2 != nil {
-					fmt.Printf("Link error: %s.\n", err2.Error())
-				}
-			} else if err == nil {
-				for i:=2; i<=99; i++ {
-					var newName2, extName string
-					if linkWithNewNames {
-						newName2, extName = getExtName(newName)
-					} else {
-						newName2, extName = getExtName(oldName)
-					}
-
-					newName2 += " (" + strconv.Itoa(i) + ")"
-					newName2 += extName
-					newPath2 := path.Join(destDir, newName2)
-
-					if _, err2 := os.Stat(newPath2); os.IsNotExist(err2) {
-						err3 := os.Link(oldPath, newPath2)
-						if err3 != nil {
-							fmt.Printf("Link error: %s.\n", err3.Error())
-						} else {
-							break
-						}
-					}
+					linkWithNewNames = true
 				}
 			} else {
-				fmt.Printf("os.Stat unknown error:%s.\n", err.Error())
+				var newVideoName string
+				newVideos, episodes, newVideoName = manualLink(newVideos, episodes, videos)
+
+				oldDir := getDirName(destDir)
+				destDir = path.Join(oldDir, newVideoName)
+
+				linkWithNewNames = true
 			}
 		}
-	} else {
-		if inner {
+	}
+
+	fmt.Println("Now linking the files...")
+
+	if !linkWithNewNames {
+		_, dirName := getSplitPath(dir)
+		dirBase, _ := getSplitPath(destDir)
+		destDir = path.Join(dirBase, dirName)
+	}
+
+	if _, err := os.Stat(destDir); os.IsNotExist(err) {
+		fmt.Printf("dest not exists, creating.\n")
+		err2 := os.MkdirAll(destDir, 0666)
+		if err2 != nil {
+			fmt.Printf("os.MkdirAll error: %s.\n", err2.Error())
+			os.Exit(1)
 			return
 		}
+	}
+
+	for i, newName := range newFilenames {
+		oldName := videos[i]
+
+		oldPath := path.Join(dir, oldName)
+		newPath := ""
+		if linkWithNewNames {
+			newPath = path.Join(destDir, newName)
+		} else {
+			newPath = path.Join(destDir, oldName)
+		}
+
+		if _, err := os.Stat(newPath); os.IsNotExist(err) {
+			err2 := os.Link(oldPath, newPath)
+			if err2 != nil {
+				fmt.Printf("Link error: %s.\n", err2.Error())
+				os.Exit(1)
+				return
+			}
+		} else if err == nil {
+			for i := 2; i <= 99; i++ {
+				var newName2, extName string
+				if linkWithNewNames {
+					newName2, extName = getExtName(newName)
+				} else {
+					newName2, extName = getExtName(oldName)
+				}
+
+				newName2 += " (" + strconv.Itoa(i) + ")"
+				newName2 += extName
+				newPath2 := path.Join(destDir, newName2)
+
+				if _, err2 := os.Stat(newPath2); os.IsNotExist(err2) {
+					err3 := os.Link(oldPath, newPath2)
+					if err3 != nil {
+						fmt.Printf("Link error: %s.\n", err3.Error())
+						os.Exit(1)
+						return
+					} else {
+						break
+					}
+				}
+			}
+		} else {
+			fmt.Printf("os.Stat unknown error:%s.\n", err.Error())
+			os.Exit(1)
+			return
+		}
+	}
+}
+
+func probeDir(dir, destDir string) {
+	videos := getVideosInDir(dir)
+
+	//check video files exists
+	if len(videos) > 0 {
+		probeDirInner(dir, destDir, videos, 0, destDir)
+	} else {
 		//search for subdirectories
+		files, err := ioutil.ReadDir(dir)
+		if err != nil {
+			fmt.Printf("Cannot read dir %s. error: %s.\n", dir, err.Error())
+			os.Exit(1)
+			return
+		}
+
 		for _, file := range files {
 			if file.IsDir() {
 				dirName := file.Name()
 
 				fmt.Printf("Search into %s? [y/N] ", dirName)
 				var prompt string
-				fmt.Scanln(&prompt)
+				prompt = getLine()
 
 				if prompt == "y" || prompt == "Y" {
 					destDir2 := probeVideoName(dirName)
 					destDir2 = strings.TrimSpace(destDir2)
+					if destDir2 == "" {
+						destDir2 = "Unknown"
+					}
 					destDir2 = path.Join(destDir, destDir2)
+					origDestDir := path.Join(destDir, dirName)
 
 					srcDir := path.Join(dir, dirName)
 
-					probeDir(srcDir, destDir2, true)
+					probeDirInner(srcDir, destDir2, nil, 1, origDestDir)
 				}
 			}
 		}
@@ -351,5 +609,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	probeDir(*sourceDir, *destinationDir, false)
+	scanner = bufio.NewScanner(os.Stdin)
+
+	probeDir(*sourceDir, *destinationDir)
 }
