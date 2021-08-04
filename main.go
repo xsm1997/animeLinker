@@ -24,16 +24,21 @@ const (
 var (
 	sourceDir      = flag.String("src", "", "source dir")
 	destinationDir = flag.String("dst", "", "destination dir")
-	rule           = flag.String("rule", DefaultRuleAnime, "episode naming rule")
+	ruleFlag       = flag.String("rule", "", "episode naming rule")
+	mode = flag.String("mode", "anime", "mode: anime or movie")
+	rule = DefaultRuleAnime
 
 	videoSuffix = []string{
 		".mkv",
 		".mp4",
 		".avi",
+		".m2ts",
+	}
+
+	otherSuffix = []string {
 		".ass",
 		".srt",
 		".mka",
-		".m2ts",
 	}
 
 	deleteRegex = []string{
@@ -131,6 +136,15 @@ func probeVideoName(name string) string {
 		}
 	}
 
+	if !extValid {
+		for _, validExtName := range otherSuffix {
+			if ext2 == validExtName {
+				extValid = true
+				break
+			}
+		}
+	}
+
 	//match any dot except dots in episode name (e.g. 12.5), but match the dot in (.5  12.) for incomplete episode name
 	regex := regexp2.MustCompile(`((?<!\d+)\.(?!\d+)|(?<!\d+)\.(?=[0-9]+)|(?<=\d+)\.(?!\d+))`, 0)
 	if extValid {
@@ -206,7 +220,7 @@ func getExtName(name string) (string, string) {
 	}
 
 	matchList := []string{
-		"sc", "tc", "chs", "cht", "en", "jp",
+		".sc", ".tc", ".chs", ".cht", ".en", ".jp",
 	}
 
 	f := false
@@ -219,7 +233,7 @@ func getExtName(name string) (string, string) {
 
 	f2 := false
 	for _, match := range matchList {
-		if strings.Contains(extname2, match) {
+		if extname2 == match {
 			f2 = true
 			break
 		}
@@ -262,6 +276,12 @@ func getVideosInDir(dir string) []string {
 					videos = append(videos, filename)
 				}
 			}
+
+			for _, suffix := range otherSuffix {
+				if strings.HasSuffix(filename, suffix) {
+					videos = append(videos, filename)
+				}
+			}
 		}
 	}
 
@@ -300,17 +320,33 @@ func checkDirEmpty(dir string) bool {
 	}
 }
 
-func generatesVideoNames(videos, episodes []string) (newFilenames []string) {
+func getVideosCount(videos []string) int {
+	count := 0
+
+	for _, name := range videos {
+		extname := path.Ext(name)
+
+		validExt := false
+		for _, suffix := range videoSuffix {
+			if suffix == extname {
+				validExt = true
+				break
+			}
+		}
+
+		if validExt {
+			count++
+		}
+	}
+
+	return count
+}
+
+func generatesVideoNames(videos, episodes []string, manual bool) (newFilenames []string) {
 	newFilenames = make([]string, len(videos))
 
 	for i, video := range videos {
-		newName := *rule
-
-		if newName == DefaultRuleAnime {
-			if episodes[i] == "" {
-				newName = DefaultRuleMovie
-			}
-		}
+		newName := rule
 
 		var extName string
 		video, extName = getExtName(video)
@@ -323,13 +359,17 @@ func generatesVideoNames(videos, episodes []string) (newFilenames []string) {
 
 		newName = strings.TrimSpace(newName)
 
+		if *mode == "movie" && getVideosCount(videos) > 1 && !manual {
+			newName = path.Join(video, newName)
+		}
+
 		newFilenames[i] = newName
 	}
 
 	return
 }
 
-func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []string, newVideoName string) {
+func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []string, linkDir string) {
 	var input string
 
 	fmt.Println()
@@ -338,35 +378,109 @@ func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []stri
 	videoName, _ := getExtName(videos[0])
 	videoName = strings.TrimSpace(videoName)
 
-	fmt.Printf("Input anime name: [%s] ", videoName)
+	fmt.Printf("Input name: [%s] ", videoName)
 	input = getLine()
 
 	if input != "" {
 		videoName = input
 	}
 
-	newVideoName = videoName
+	linkDir = videoName
+
+	fmt.Printf("Input link directory: [%s] ", videoName)
+	input = getLine()
+
+	if input != "" {
+		linkDir = input
+	}
 
 	newVideos = make([]string, len(videos))
 	newEpisodes = make([]string, len(episodes))
 
-	for i, name := range names {
-		_, ext := getExtName(name)
-		episode := episodes[i]
+	if *mode == "anime" {
+		for i, name := range names {
+			_, ext := getExtName(name)
+			episode := episodes[i]
 
-		fmt.Printf("Input episode name of '%s' (# for empty): [%s] ", name, episode)
-		input = getLine()
+			fmt.Printf("Input episode name of '%s' (# for empty, $ for not linking): [%s] ", name, episode)
+			input = getLine()
 
-		if input != "" {
-			episode = input
+			if input != "" {
+				episode = input
+			}
+
+			if input == "#" {
+				episode = ""
+			}
+
+			if input == "$" {
+				newVideos[i] = ""
+				newEpisodes[i] = ""
+			} else {
+				newVideos[i] = videoName + ext
+				newEpisodes[i] = episode
+			}
+		}
+	} else if *mode == "movie" {
+		if getVideosCount(names) <= 1 {
+			for i, name := range names {
+				_, ext := getExtName(name)
+				newVideos[i] = videoName + ext
+				newEpisodes[i] = ""
+			}
+		} else {
+			for i, name := range names {
+				filename, ext := getExtName(name)
+
+				movieName := filename
+
+				fmt.Printf("Input movie name of '%s' ($ for not linking): [%s] ", filename, filename)
+				input = getLine()
+
+				if input != "" {
+					movieName = input
+				}
+
+				if input == "$" {
+					newVideos[i] = ""
+					newEpisodes[i] = ""
+					continue
+				}
+
+				movieLinkDir := movieName
+
+				fmt.Printf("Input link directory of '%s' (# for top directory): [%s] ", name, movieName)
+				input = getLine()
+
+				if input != "" {
+					movieLinkDir = input
+				}
+
+				if input == "#" {
+					newVideos[i] = movieName + ext
+				} else {
+					newVideos[i] = path.Join(movieLinkDir, movieName + ext)
+				}
+
+
+				newEpisodes[i] = ""
+			}
+		}
+	}
+
+	// remove omitted episode
+	newVideos_ := newVideos
+	newEpisodes_ := newEpisodes
+	newVideos = make([]string, 0)
+	newEpisodes = make([]string, 0)
+
+	for i, video := range newVideos_ {
+		if video == "" {
+			continue
 		}
 
-		if input == "#" {
-			episode = ""
-		}
-
-		newVideos[i] = videoName + ext
-		newEpisodes[i] = episode
+		newVideos = append(newVideos, video)
+		newEpisodes = append(newEpisodes, newEpisodes_[i])
 	}
 
 	return
@@ -423,12 +537,16 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 
 	var newFilenames []string
 
+	flagManualLink := false
+
 	for {
 		if checkFileExists(destDir) {
 			fmt.Printf("[WARNING] Directory '%s' already exists!\n", destDir)
 		}
 
-		newFilenames = generatesVideoNames(newVideos, episodes)
+
+
+		newFilenames = generatesVideoNames(newVideos, episodes, flagManualLink)
 
 		fmt.Println()
 
@@ -483,6 +601,7 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 				destDir = path.Join(oldDir, newVideoName)
 
 				linkWithNewNames = true
+				flagManualLink = true
 			}
 		}
 	}
@@ -497,7 +616,7 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 
 	if _, err := os.Stat(destDir); os.IsNotExist(err) {
 		fmt.Printf("dest not exists, creating.\n")
-		err2 := os.MkdirAll(destDir, 0666)
+		err2 := os.MkdirAll(destDir, 0777)
 		if err2 != nil {
 			fmt.Printf("os.MkdirAll error: %s.\n", err2.Error())
 			os.Exit(1)
@@ -514,6 +633,16 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 			newPath = path.Join(destDir, newName)
 		} else {
 			newPath = path.Join(destDir, oldName)
+		}
+
+		newPathDir, _ := getSplitPath(newPath)
+		if _, err := os.Stat(newPathDir); os.IsNotExist(err) {
+			err2 := os.MkdirAll(newPathDir, 0777)
+			if err2 != nil {
+				fmt.Printf("os.MkdirAll error: %s.\n", err2.Error())
+				os.Exit(1)
+				return
+			}
 		}
 
 		if _, err := os.Stat(newPath); os.IsNotExist(err) {
@@ -607,6 +736,19 @@ func main() {
 	if *destinationDir == "" {
 		fmt.Println("dst must not be empty")
 		os.Exit(1)
+	}
+
+	if *mode != "anime" && *mode != "movie" {
+		fmt.Println("mode must be anime or movie")
+		os.Exit(1)
+	}
+
+	if *ruleFlag == "" {
+		if *mode == "movie" {
+			rule = DefaultRuleMovie
+		}
+	} else {
+		rule = *ruleFlag
 	}
 
 	scanner = bufio.NewScanner(os.Stdin)
