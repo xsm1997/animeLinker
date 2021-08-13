@@ -25,8 +25,8 @@ var (
 	sourceDir      = flag.String("src", "", "source dir")
 	destinationDir = flag.String("dst", "", "destination dir")
 	ruleFlag       = flag.String("rule", "", "episode naming rule")
-	mode = flag.String("mode", "anime", "mode: anime or movie")
-	rule = DefaultRuleAnime
+	mode           = flag.String("mode", "anime", "mode: anime or movie")
+	rule           = DefaultRuleAnime
 
 	videoSuffix = []string{
 		".mkv",
@@ -35,7 +35,7 @@ var (
 		".m2ts",
 	}
 
-	otherSuffix = []string {
+	otherSuffix = []string{
 		".ass",
 		".srt",
 		".mka",
@@ -459,28 +459,12 @@ func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []stri
 				if input == "#" {
 					newVideos[i] = movieName + ext
 				} else {
-					newVideos[i] = path.Join(movieLinkDir, movieName + ext)
+					newVideos[i] = path.Join(movieLinkDir, movieName+ext)
 				}
-
 
 				newEpisodes[i] = ""
 			}
 		}
-	}
-
-	// remove omitted episode
-	newVideos_ := newVideos
-	newEpisodes_ := newEpisodes
-	newVideos = make([]string, 0)
-	newEpisodes = make([]string, 0)
-
-	for i, video := range newVideos_ {
-		if video == "" {
-			continue
-		}
-
-		newVideos = append(newVideos, video)
-		newEpisodes = append(newEpisodes, newEpisodes_[i])
 	}
 
 	return
@@ -544,8 +528,6 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 			fmt.Printf("[WARNING] Directory '%s' already exists!\n", destDir)
 		}
 
-
-
 		newFilenames = generatesVideoNames(newVideos, episodes, flagManualLink)
 
 		fmt.Println()
@@ -599,6 +581,20 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 
 				oldDir := getDirName(destDir)
 				destDir = path.Join(oldDir, newVideoName)
+
+				// remove omitted episode
+				newVideos_, episodes_, videos_ := newVideos, episodes, videos
+				newVideos, episodes, videos = make([]string, 0), make([]string, 0), make([]string, 0)
+
+				for i, newVideo := range newVideos_ {
+					if newVideo == "" {
+						continue
+					}
+
+					newVideos = append(newVideos, newVideo)
+					episodes = append(episodes, episodes_[i])
+					videos = append(videos, videos_[i])
+				}
 
 				linkWithNewNames = true
 				flagManualLink = true
