@@ -264,8 +264,12 @@ func getDirName(name string) string {
 	dir := path.Dir(name)
 
 	if dir == "" || dir == "." {
-		index := strings.LastIndex(name, "\\")
-		dir = name[:index]
+		index := strings.LastIndex(name, string(os.PathSeparator))
+		if index >= 0 {
+			dir = name[:index]
+		} else {
+			dir = name
+		}
 	}
 
 	return dir
