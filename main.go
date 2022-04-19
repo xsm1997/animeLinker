@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -160,6 +161,19 @@ func probeVideoName(name string) string {
 
 func getEpisode(name string) string {
 	name, _ = getExtName(name)
+
+	sxxexxRegex := regexp.MustCompile(`[Ss]\d{1,3}[Ee]\d{1,3}`)
+	sxxexxStr := sxxexxRegex.FindString(name)
+	if sxxexxStr != "" {
+		return sxxexxStr
+	}
+
+	exxRegex := regexp.MustCompile(`[Ee]\d{1,3}`)
+	exxStr := exxRegex.FindString(name)
+	if exxStr != "" {
+		return exxStr
+	}
+
 	episode := ""
 
 	if strings.Contains(name, "OVA") {
@@ -579,7 +593,7 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 				var newVideoName string
 				newVideos, episodes, newVideoName = manualLink(newVideos, episodes, videos)
 
-				oldDir := getDirName(destDir)
+				oldDir := getDirName(origDestDir)
 				destDir = path.Join(oldDir, newVideoName)
 
 				// remove omitted episode
@@ -694,6 +708,11 @@ func probeDir(dir, destDir string) {
 			os.Exit(1)
 			return
 		}
+
+		//sort by modtime desc
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].ModTime().After(files[j].ModTime())
+		})
 
 		for _, file := range files {
 			if file.IsDir() {
