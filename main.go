@@ -194,6 +194,18 @@ func getEpisode(name string) string {
 	return episode + numbers
 }
 
+func getSeason(name string) string {
+	name, _ = getExtName(name)
+
+	sxxRegex := regexp.MustCompile(`[Ss]\d{1,3}}`)
+	sxxStr := sxxRegex.FindString(name)
+	if sxxStr != "" {
+		return sxxStr
+	}
+
+	return "S01"
+}
+
 func deleteEpisodeName(name, episode string) string {
 	if episode == "" {
 		return name
@@ -387,17 +399,16 @@ func generatesVideoNames(videos, episodes []string, manual bool) (newFilenames [
 	return
 }
 
-func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []string, linkDir string) {
+func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos, newEpisodes []string, linkDir string) {
 	var input string
 
 	fmt.Println()
 	defer fmt.Println()
 
-	videoName, _ := getExtName(videos[0])
-	videoName = strings.TrimSpace(videoName)
-
-	fmt.Printf("Input name: [%s] ", videoName)
+	fmt.Printf("Input name: [%s] ", origLinkDir)
 	input = getLine()
+
+	videoName := origLinkDir
 
 	if input != "" {
 		videoName = input
@@ -415,6 +426,9 @@ func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []stri
 	newVideos = make([]string, len(videos))
 	newEpisodes = make([]string, len(episodes))
 
+	season := "S01"
+	seasonPrompt := true
+
 	if *mode == "anime" {
 		for i, name := range names {
 			_, ext := getExtName(name)
@@ -431,13 +445,33 @@ func manualLink(videos, episodes, names []string) (newVideos, newEpisodes []stri
 				episode = ""
 			}
 
+			if input != "$" {
+				if seasonPrompt {
+					fmt.Printf("Input season name of '%s' (# for empty, ! for all %s): [%s] ", name, season, season)
+					input2 := getLine()
+
+					if input2 == "!" {
+						seasonPrompt = false
+					} else if input2 == "#" {
+						season = ""
+					} else if input2 != "" {
+						season = input2
+					}
+				}
+
+			}
+
 			if input == "$" {
 				newVideos[i] = ""
 				newEpisodes[i] = ""
 			} else {
 				newVideos[i] = videoName + ext
+				if season != "" {
+					newVideos[i] = path.Join(season, newVideos[i])
+				}
 				newEpisodes[i] = episode
 			}
+
 		}
 	} else if *mode == "movie" {
 		if getVideosCount(names) <= 1 {
@@ -529,9 +563,14 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 	for i, videoName := range videos {
 		newName := probeVideoName(videoName)
 		episode := getEpisode(newName)
-		newName = deleteEpisodeName(newName, episode)
+		newName2 := deleteEpisodeName(newName, episode)
 
-		newVideos[i] = newName
+		if *mode == "anime" {
+			season := getSeason(newName)
+			newName2 = path.Join(season, newName2)
+		}
+
+		newVideos[i] = newName2
 		episodes[i] = episode
 	}
 
@@ -594,11 +633,12 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 					linkWithNewNames = true
 				}
 			} else {
-				var newVideoName string
-				newVideos, episodes, newVideoName = manualLink(newVideos, episodes, videos)
+				var linkDir string
+				_, linkDir = getSplitPath(destDir)
+				newVideos, episodes, linkDir = manualLink(newVideos, episodes, videos, linkDir)
 
 				oldDir := getDirName(origDestDir)
-				destDir = path.Join(oldDir, newVideoName)
+				destDir = path.Join(oldDir, linkDir)
 
 				// remove omitted episode
 				newVideos_, episodes_, videos_ := newVideos, episodes, videos
