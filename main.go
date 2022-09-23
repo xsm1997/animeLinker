@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/dlclark/regexp2"
 )
 
 const (
@@ -57,16 +55,6 @@ var (
 	scanner *bufio.Scanner
 )
 
-func isDigitOrDot(str string) bool {
-	for _, s := range str {
-		if !(s >= '0' && s <= '9' || s == '.') {
-			return false
-		}
-	}
-
-	return true
-}
-
 func getLine() string {
 	if scanner.Scan() {
 		return scanner.Text()
@@ -91,28 +79,45 @@ func getSplitPath(path string) (string, string) {
 	return path[:index], path[index+1:]
 }
 
-func probeVideoName(name string) string {
-	//delete patterns
+func deletePatterns(name string) string {
 	for _, str := range deleteRegex {
 		regex := regexp.MustCompile(str)
-		name = regex.ReplaceAllStringFunc(name, func(s string) string {
-			if strings.Contains(strings.ToUpper(s), "OVA") {
-				return s
+		name = regex.ReplaceAllString(name, "")
+	}
+
+	return name
+}
+
+func probeVideoName(name string) string {
+	name, ext := getExtName(name)
+	origName := name
+
+	//delete patterns
+	name = deletePatterns(name)
+	name = strings.TrimSpace(name)
+
+	if name == "" {
+		name = origName
+
+		regex := regexp.MustCompile(`\[.+?\]`)
+		fields := regex.FindAllString(name, -1)
+
+		newFields := make([]string, 0)
+		for _, str := range fields {
+			str = str[1 : len(str)-1]
+			str = strings.TrimSpace(str)
+			if str != "" {
+				newFields = append(newFields, str)
 			}
+		}
 
-			if strings.Contains(strings.ToUpper(s), "CM") {
-				return s
-			}
-
-			sRune := []rune(s)
-			sRune = sRune[1 : len(sRune)-1]
-
-			if isDigitOrDot(string(sRune)) {
-				return s
-			}
-
+		if len(newFields) == 0 {
 			return ""
-		})
+		} else if len(newFields) == 1 {
+			name = newFields[0]
+		} else {
+			name = newFields[1]
+		}
 	}
 
 	//delete chars
@@ -120,78 +125,58 @@ func probeVideoName(name string) string {
 		name = strings.ReplaceAll(name, char, " ")
 	}
 
-	//replace '.' except ext name
-	name2, ext := getExtName(name)
-	extValid := false
-
-	//probe xxx.sc.ass, to get .ass
-	ext2 := path.Ext(ext)
-	if ext2 == "" {
-		ext2 = ext
-	}
-
-	for _, validExtName := range videoSuffix {
-		if ext2 == validExtName {
-			extValid = true
-			break
-		}
-	}
-
-	if !extValid {
-		for _, validExtName := range otherSuffix {
-			if ext2 == validExtName {
-				extValid = true
-				break
-			}
-		}
-	}
-
-	//match any dot except dots in episode name (e.g. 12.5), but match the dot in (.5  12.) for incomplete episode name
-	regex := regexp2.MustCompile(`((?<!\d+)\.(?!\d+)|(?<!\d+)\.(?=[0-9]+)|(?<=\d+)\.(?!\d+))`, 0)
-	if extValid {
-		name2, _ = regex.Replace(name2, " ", -1, -1)
-		name2 = strings.TrimSpace(name2)
-		return name2 + ext
-	} else {
-		name2, _ = regex.Replace(name, " ", -1, -1)
-		name2 = strings.TrimSpace(name2)
-		return name2
-	}
+	//delete EP number
+	regex := regexp.MustCompile(`((\[?(CM|OVA|#)?\d{1,3}(v\d{1,2}|\.\d{1,2})?\]?)|(\[?第\d{1,3}(v\d{1,2}|\.\d{1,2})?[话話]\]?))`)
+	name = regex.ReplaceAllString(name, "")
+	name = strings.TrimSpace(name)
+	return name + ext
 }
 
 func getEpisode(name string) string {
 	name, _ = getExtName(name)
 
-	sxxexxRegex := regexp.MustCompile(`[Ss]\d{1,3}[Ee]\d{1,3}`)
-	sxxexxStr := sxxexxRegex.FindString(name)
-	if sxxexxStr != "" {
-		return sxxexxStr
-	}
-
-	exxRegex := regexp.MustCompile(`[Ee]\d{1,3}`)
+	exxRegex := regexp.MustCompile(`[ \-][Ee][Pp]?\d{1,3}`)
 	exxStr := exxRegex.FindString(name)
 	if exxStr != "" {
+		exxStr = regexp.MustCompile("([EePp ]|-)").ReplaceAllString(exxStr, "")
 		return exxStr
 	}
 
-	episode := ""
-
-	if strings.Contains(name, "OVA") {
-		episode = "OVA"
-	}
-
-	if strings.Contains(name, "CM") {
-		episode = "CM"
-	}
-
-	regex := regexp.MustCompile(`(\d{1,3}\.\d{1,2}|\d{1,3})`) //find the last number in string
-	numbersSlice := regex.FindAllString(name, -1)
 	numbers := ""
+
+	//detect [01], [OVA1], 第01話, [第01話], etc.
+	regex := regexp.MustCompile(`\[((第\d{1,3}(v\d{1,2}|\.\d{1,2})?[话話])|((CM|OVA|#)?\d{1,3}(v\d{1,2}|\.\d{1,2})?))\]`)
+	numbersSlice := regex.FindAllString(name, -1)
 	if len(numbersSlice) > 0 {
-		numbers = numbersSlice[0]
+		numbers = numbersSlice[len(numbersSlice)-1]
+		numbers = regexp.MustCompile(`[\[\]第话話#]`).ReplaceAllString(numbers, "")
 	}
 
-	return episode + numbers
+	name = deletePatterns(name)
+	name = strings.TrimSpace(name)
+
+	if numbers == "" {
+		//detect - 01, -12.5, etc.
+		regex = regexp.MustCompile(`\s*-\s*((第\d{1,3}(v\d{1,2}|\.\d{1,2})?[话話])|((CM|OVA|#)?\d{1,3}(v\d{1,2}|\.\d{1,2})?))`)
+		numbersSlice = regex.FindAllString(name, -1)
+		if len(numbersSlice) > 0 {
+			numbers = numbersSlice[len(numbersSlice)-1]
+			numbers = regexp.MustCompile(`[-第话話#]`).ReplaceAllString(numbers, "")
+			numbers = strings.TrimSpace(numbers)
+		}
+	}
+
+	if numbers == "" {
+		regex = regexp.MustCompile(`\s+((第\d{1,3}(v\d{1,2}|\.\d{1,2})?[话話])|((CM|OVA|#)?\d{1,3}(v\d{1,2}|\.\d{1,2})?))`)
+		numbersSlice = regex.FindAllString(name, -1)
+		if len(numbersSlice) > 0 {
+			numbers = numbersSlice[len(numbersSlice)-1]
+			numbers = regexp.MustCompile(`[第话話#]`).ReplaceAllString(numbers, "")
+			numbers = strings.TrimSpace(numbers)
+		}
+	}
+
+	return numbers
 }
 
 func getSeason(name string) string {
@@ -206,32 +191,31 @@ func getSeason(name string) string {
 	return "S01"
 }
 
-func deleteEpisodeName(name, episode string) string {
-	if episode == "" {
-		return name
+func checkExtName(ext string) bool {
+	if len(ext) > 6 { //long ext names
+		return false
 	}
 
-	name, extName := getExtName(name)
-	split := strings.Fields(name)
-	newName := ""
-
-	if len(split) == 1 {
-		return name + extName
-	} else {
-		for _, str := range split {
-			if len(str) > 0 {
-				if !strings.Contains(str, episode) {
-					newName += str + " "
-				}
-			}
-
+	ext = ext[1:]
+	for _, c := range ext {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
 		}
-		return newName + extName
 	}
+
+	return true
 }
 
 func getExtName(name string) (string, string) {
 	extname := path.Ext(name)
+
+	if extname == "" {
+		return name, ""
+	}
+
+	if !checkExtName(extname) {
+		return name, ""
+	}
 	name = name[:len(name)-len(extname)]
 
 	//handle "[02].sc.ass" etc.
@@ -239,33 +223,26 @@ func getExtName(name string) (string, string) {
 	if extname2 == "" {
 		return name, extname
 	}
-	name2 := name[:len(name)-len(extname2)]
 
-	suffixList := []string{
-		" ", ")", "]", ">", "】", "）",
+	if !checkExtName(extname2) {
+		return name, extname
 	}
+
+	name2 := name[:len(name)-len(extname2)]
 
 	matchList := []string{
 		".sc", ".tc", ".chs", ".cht", ".en", ".jp",
 	}
 
 	f := false
-	for _, suffix := range suffixList {
-		if strings.HasSuffix(name2, suffix) {
+	for _, match := range matchList {
+		if extname2 == match {
 			f = true
 			break
 		}
 	}
 
-	f2 := false
-	for _, match := range matchList {
-		if extname2 == match {
-			f2 = true
-			break
-		}
-	}
-
-	if f || f2 {
+	if f {
 		return name2, extname2 + extname
 	} else {
 		return name, extname
@@ -434,6 +411,10 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 			_, ext := getExtName(name)
 			episode := episodes[i]
 
+			if episode == "" {
+				episode = "$"
+			}
+
 			fmt.Printf("Input episode name of '%s' (# for empty, $ for not linking): [%s] ", name, episode)
 			input = getLine()
 
@@ -445,7 +426,7 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 				episode = ""
 			}
 
-			if input != "$" {
+			if episode != "$" {
 				if seasonPrompt {
 					fmt.Printf("Input season name of '%s' (# for empty, ! for all %s): [%s] ", name, season, season)
 					input2 := getLine()
@@ -461,7 +442,7 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 
 			}
 
-			if input == "$" {
+			if episode == "$" {
 				newVideos[i] = ""
 				newEpisodes[i] = ""
 			} else {
@@ -535,8 +516,15 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 		return
 	}
 
+	_, dirName := getSplitPath(dir)
+	animeName := probeVideoName(dirName)
+	animeName = strings.TrimSpace(animeName)
+	if animeName == "" {
+		animeName = "Unknown"
+	}
+
 	//check directory empty.
-	//if not empty, ask user if want to create a sub-directory.
+	//if not empty, ask user if he wants to create a subdirectory.
 	//useful in linking just one movie folder.
 	if !checkDirEmpty(destDir) && level == 0 {
 		fmt.Println()
@@ -544,16 +532,8 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 		prompt = getLine()
 
 		if prompt != "n" && prompt != "N" {
-			_, dirName := getSplitPath(dir)
-
-			destDir2 := probeVideoName(dirName)
-			destDir2 = strings.TrimSpace(destDir2)
-			if destDir2 == "" {
-				destDir2 = "Unknown"
-			}
-
-			destDir = path.Join(destDir, destDir2)
-			origDestDir = path.Join(origDestDir, destDir2)
+			destDir = path.Join(destDir, animeName)
+			origDestDir = path.Join(origDestDir, animeName)
 		}
 	}
 
@@ -561,16 +541,16 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 	episodes := make([]string, len(videos))
 
 	for i, videoName := range videos {
-		newName := probeVideoName(videoName)
-		episode := getEpisode(newName)
-		newName2 := deleteEpisodeName(newName, episode)
+		_, ext := getExtName(videoName)
+		newName := animeName + ext
+		episode := getEpisode(videoName)
 
 		if *mode == "anime" {
-			season := getSeason(newName)
-			newName2 = path.Join(season, newName2)
+			season := getSeason(videoName)
+			newName = path.Join(season, newName)
 		}
 
-		newVideos[i] = newName2
+		newVideos[i] = newName
 		episodes[i] = episode
 	}
 
@@ -753,7 +733,7 @@ func probeDir(dir, destDir string) {
 			return
 		}
 
-		//sort by modtime desc
+		//sort by modify time desc
 		sort.Slice(files, func(i, j int) bool {
 			return files[i].ModTime().After(files[j].ModTime())
 		})
