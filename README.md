@@ -1,5 +1,5 @@
 # animeLinker
-智障硬链接器 for jellyfin
+智障硬链接器 for Jellyfin/Emby (Hard linker for Jellyfin/Emby)
 
 pong友，你是否为了pt下载番剧文件名不规范，jellyfin不能刮削而烦恼？是否为了给文件改名后不能续种而烦恼？
 
