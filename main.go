@@ -46,6 +46,11 @@ var (
 		`【.*?】`,   //find strings between 【】
 		`（.*?）`,   //find strings between （）
 		`<.*?>`,   //find strings between <>
+		`1080[pP]`,
+		`2160[pP]`,
+		`4[kK]`,
+		`[Bb]lu[Rr]ay`,
+		`BLURAY`,
 	}
 
 	deleteChar = []string{
@@ -83,6 +88,10 @@ func deletePatterns(name string) string {
 	for _, str := range deleteRegex {
 		regex := regexp.MustCompile(str)
 		name = regex.ReplaceAllString(name, "")
+	}
+
+	if *mode == "movie" {
+		name = strings.ReplaceAll(name, ".", " ")
 	}
 
 	return name
@@ -129,13 +138,21 @@ func probeVideoName(name string) string {
 	regex := regexp.MustCompile(`((\[?(CM|OVA|#)?\d{1,3}(v\d{1,2}|\.\d{1,2})?\]?)|(\[?第\d{1,3}(v\d{1,2}|\.\d{1,2})?[话話]\]?))`)
 	name = regex.ReplaceAllString(name, "")
 	name = strings.TrimSpace(name)
+
+	if *mode == "movie" {
+		ssIndex := strings.Index(name, "  ")
+		if ssIndex > 0 {
+			name = name[:ssIndex]
+		}
+	}
+
 	return name + ext
 }
 
 func getEpisode(name string) string {
 	name, _ = getExtName(name)
 
-	exxRegex := regexp.MustCompile(`[ \-][Ee][Pp]?\d{1,3}`)
+	exxRegex := regexp.MustCompile(`[Ee][Pp]?\d{1,3}`)
 	exxStr := exxRegex.FindString(name)
 	if exxStr != "" {
 		exxStr = regexp.MustCompile("([EePp ]|-)").ReplaceAllString(exxStr, "")
@@ -353,14 +370,20 @@ func generatesVideoNames(videos, episodes []string, manual bool) (newFilenames [
 	newFilenames = make([]string, len(videos))
 
 	for i, video := range videos {
+		if episodes[i] == "" && *mode == "anime" || episodes[i] == "$$$$$" {
+			newFilenames[i] = "(Not linking)"
+			continue
+		}
+
 		newName := rule
 
 		var extName string
 		video, extName = getExtName(video)
 		video = strings.TrimSpace(video)
+		episode := episodes[i]
 
 		newName = strings.ReplaceAll(newName, NameReplaceStr, video)
-		newName = strings.ReplaceAll(newName, EpisodeReplaceStr, episodes[i])
+		newName = strings.ReplaceAll(newName, EpisodeReplaceStr, episode)
 		newName = strings.TrimSpace(newName)
 		newName += extName
 
@@ -415,15 +438,11 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 				episode = "$"
 			}
 
-			fmt.Printf("Input episode name of '%s' (# for empty, $ for not linking): [%s] ", name, episode)
+			fmt.Printf("Input episode name of '%s' ($ for not linking): [%s] ", name, episode)
 			input = getLine()
 
 			if input != "" {
 				episode = input
-			}
-
-			if input == "#" {
-				episode = ""
 			}
 
 			if episode != "$" {
@@ -442,14 +461,14 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 
 			}
 
+			newVideos[i] = videoName + ext
+			if season != "" {
+				newVideos[i] = path.Join(season, newVideos[i])
+			}
+
 			if episode == "$" {
-				newVideos[i] = ""
 				newEpisodes[i] = ""
 			} else {
-				newVideos[i] = videoName + ext
-				if season != "" {
-					newVideos[i] = path.Join(season, newVideos[i])
-				}
 				newEpisodes[i] = episode
 			}
 
@@ -463,20 +482,25 @@ func manualLink(videos, episodes, names []string, origLinkDir string) (newVideos
 			}
 		} else {
 			for i, name := range names {
-				filename, ext := getExtName(name)
+				_, ext := getExtName(name)
 
-				movieName := filename
+				movieName := probeVideoName(name)
+				movieName, _ = getExtName(movieName)
 
-				fmt.Printf("Input movie name of '%s' ($ for not linking): [%s] ", filename, filename)
+				if episodes[i] == "$$$$$" {
+					movieName = "$"
+				}
+
+				fmt.Printf("Input movie name of '%s' ($ for not linking): [%s] ", name, movieName)
 				input = getLine()
 
 				if input != "" {
 					movieName = input
 				}
 
-				if input == "$" {
-					newVideos[i] = ""
-					newEpisodes[i] = ""
+				if movieName == "$" {
+					newVideos[i] = videos[i]
+					newEpisodes[i] = "$$$$$"
 					continue
 				}
 
@@ -620,20 +644,6 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 				oldDir := getDirName(origDestDir)
 				destDir = path.Join(oldDir, linkDir)
 
-				// remove omitted episode
-				newVideos_, episodes_, videos_ := newVideos, episodes, videos
-				newVideos, episodes, videos = make([]string, 0), make([]string, 0), make([]string, 0)
-
-				for i, newVideo := range newVideos_ {
-					if newVideo == "" {
-						continue
-					}
-
-					newVideos = append(newVideos, newVideo)
-					episodes = append(episodes, episodes_[i])
-					videos = append(videos, videos_[i])
-				}
-
 				linkWithNewNames = true
 				flagManualLink = true
 			}
@@ -659,6 +669,11 @@ func probeDirInner(dir, destDir string, videos []string, level int, origDestDir 
 	}
 
 	for i, newName := range newFilenames {
+		if episodes[i] == "" && *mode == "anime" || episodes[i] == "$$$$$" {
+			//omitted video
+			continue
+		}
+
 		oldName := videos[i]
 
 		oldPath := path.Join(dir, oldName)
